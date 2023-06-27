@@ -16,6 +16,8 @@ import Geometry
 from PIL import Image
 from ExifUtils import *
 from PIL.TiffTags import TAGS
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
 
 #Measurements (inches) for point to point real world distances between MAPIR Calibration Target V2 QR symbol (aruco) and reflectance target panel centers
 QR_CORNER_TO_CORNER = 5.5
@@ -245,6 +247,23 @@ def bad_target_photo(channels):
 
     return False
 
+#Calculates the linear regression of the channel model
+def get_channel_model(xr, xg, xb, y):
+    try:
+        X = np.array([xr, xg, xb]).T
+        X = np.append(X, [[0., 0.0, 0.0]], axis=0)
+        y = np.append(y, [0], axis=0)
+        print(y.shape)
+        print(y)
+        print(X.shape)
+        print(X)
+
+        return LinearRegression().fit(X, y)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        print("Error: ", e)
+        print("Line: " + str(exc_tb.tb_lineno))
+
 #Calculates the linear regression between the points produced from known reflectance of panels versus calibration photo pixel values
 def get_line_of_best_fit(x, y):
     try:
@@ -349,12 +368,10 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder,
     img_folder, FileType_img  = check_input_folder_structure(in_folder)
     camera_model_img, camera_filter_img = check_images_params(img_folder, FileType_img)
 
-    print(f"\nCamera model {camera_model_calib} and camera filter {camera_filter_img}")
-    print(f"\nCamera model {camera_model_img} and camera filter {camera_filter_img}")
-    print(FileType_img)
+    # print(f"\nCamera model {camera_model_calib} and camera filter {camera_filter_img}")
 
-    if camera_model_calib != camera_model_img or camera_filter_calib != camera_filter_img  or FileType_calib !=FileType_img :
-        sys.exit("Calibration photo does not match input image (EXIF).")
+    # if camera_model_calib != camera_model_img or camera_filter_calib != camera_filter_img  or FileType_calib !=FileType_img :
+    #     sys.exit("Calibration photo does not match input image (EXIF).")
 
     try:
         calibration_coefficients = {
@@ -478,6 +495,18 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder,
             xblue, yblue = check_exposure_quality(xblue, yblue)
 
             x_channels = [xred, xgreen, xblue]
+            
+        # print("\nRed values: " + str(xred))
+        # print("Green values: " + str(xgreen))
+        # print("Blue values: " + str(xblue))
+        
+        red_model   = get_channel_model(xred, xgreen, xblue, yred)
+        green_model = get_channel_model(xred, xgreen, xblue, ygreen)
+        blue_model  = get_channel_model(xred, xgreen, xblue, yblue)
+        
+        print("\nRed model: " + str(red_model.coef_)   + " * x + " + str(red_model.intercept_))
+        print("Green model: " + str(green_model.coef_) + " * x + " + str(green_model.intercept_))
+        print("Blue model : " + str(blue_model.coef_)   + " * x + " + str(blue_model.intercept_))
 
         red_slope, red_intercept = get_line_of_best_fit(xred, yred)
         green_slope, green_intercept = get_line_of_best_fit(xgreen, ygreen)
@@ -500,7 +529,7 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder,
         if bad_target_photo(x_channels):
             print("\nWARNING: BAD CALIBRATION PHOTO")
 
-        return calibration_coefficients, FileType_calib
+        return red_model, green_model, blue_model, calibration_coefficients, FileType_calib
 
     except Exception as e:
         exc_type, exc_obj, exc_tb = sys.exc_info()
