@@ -157,9 +157,9 @@ def color_correction(color):
     green_coeffs = COLOR_CORRECTION_VECTORS[3:6]
     blue_coeffs = COLOR_CORRECTION_VECTORS[:3]
 
-    color[:, :, 2] = (red_coeffs[0] * color[:, :, 0]) + (red_coeffs[1] * color[:, :, 1]) + (red_coeffs[2] * color[:, :, 2]) + roff
+    color[:, :, 2] = (red_coeffs[0] * color[:, :, 0])   + (red_coeffs[1] * color[:, :, 1])   + (red_coeffs[2] * color[:, :, 2])   + roff
     color[:, :, 1] = (green_coeffs[0] * color[:, :, 0]) + (green_coeffs[1] * color[:, :, 1]) + (green_coeffs[2] * color[:, :, 2]) + goff
-    color[:, :, 0] = (blue_coeffs[0] * color[:, :, 0]) + (blue_coeffs[1] * color[:, :, 1]) + (blue_coeffs[2] * color[:, :, 2]) + boff
+    color[:, :, 0] = (blue_coeffs[0] * color[:, :, 0])  + (blue_coeffs[1] * color[:, :, 1])  + (blue_coeffs[2] * color[:, :, 2])  + boff
 
     color[color > 1.0] = 1.0
     color[color < 0.0] = 0.0

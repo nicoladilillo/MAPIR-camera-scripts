@@ -42,6 +42,88 @@ calibration_coefficients = {
     "mono":  {"slope": 0.00, "intercept": 0.00}
 }
 
+#Read file applying vignette correction
+def ApplyVig(target_image_path, FileType_calib, vigImg, vig=True):   
+    
+    img = cv2.imread(target_image_path)
+    
+    if not vig:
+        return img
+    
+    if FileType_calib == 'TIFF':
+        dc = [120, 119, 119]
+    else:
+        # return img  
+        dc = [0, 0, 0]
+        
+    #Create the dark current image (subMatrix) to be subtracted from img
+    
+    subMatrixB = np.full(shape = (3000, 4000),fill_value = dc[0],dtype=int)
+    subMatrixG = np.full(shape = (3000, 4000),fill_value = dc[1],dtype=int)
+    subMatrixR = np.full(shape = (3000, 4000),fill_value = dc[2],dtype=int)
+
+    if FileType_calib == 'TIFF':
+        subMatrixB = subMatrixB.astype("uint32").astype("uint16")
+        subMatrixG = subMatrixG.astype("uint32").astype("uint16") 
+        subMatrixR = subMatrixR.astype("uint32").astype("uint16") 
+        dc = [120, 119, 119]
+    else:
+        subMatrixB = subMatrixB.astype("uint8")
+        subMatrixG = subMatrixG.astype("uint8") 
+        subMatrixR = subMatrixR.astype("uint8")
+        dc = [0, 0, 0]
+
+    #Split img into 3 channels
+    r = img[:, :, 2]
+    g = img[:, :, 1]
+    b = img[:, :, 0] 
+
+    #Subtract dark current image from each channel of img
+    b -= subMatrixB
+    g -= subMatrixG
+    r -= subMatrixR
+    
+    #Split vigImg into 3 channels
+    
+    vigB = cv2.imread(vigImg[0],-1)
+    vigG = cv2.imread(vigImg[1],-1)
+    vigR = cv2.imread(vigImg[2],-1)
+    
+    #Apply flat field (vignette) correction by dividing vigImg and img per channel
+
+    b = np.divide(b,vigB)
+    g = np.divide(g,vigG)
+    r = np.divide(r,vigR)
+    
+    #Clip off any values outside the bitdepth range (keep exposure lower to reduce clipping)
+    if FileType_calib == 'TIFF':
+        b[b > 65535.0] = 65535.0
+        b[b < 0.0] = 0.0
+        
+        g[g > 65535.0] = 65535.0
+        g[g < 0.0] = 0.0
+        
+        r[r > 65535.0] = 65535.0
+        r[r< 0.0] = 0.0
+    
+        color = cv2.merge((b,g,r))
+        color = color.astype("uint32").astype("uint16")
+    else:
+        b[b > 255.0] = 255.0
+        b[b < 0.0] = 0.0
+        
+        g[g > 255.0] = 255.0
+        g[g < 0.0] = 0.0
+        
+        r[r > 255.0] = 255.0
+        r[r< 0.0] = 0.0
+    
+        color = cv2.merge((b,g,r))                
+        color = color.astype("uint8") 
+
+    #Return the corrected img
+    return color
+
 #Outputs modified calibration photo image showing pixels used in each reflectance panel for calibration values
 def print_center_targs(image, target1, target2, target3, target4, sample_diameter):
 
@@ -249,34 +331,27 @@ def check_images_params(image_path, FileType):
         camera_model = exifdata.get(272,272)
         camera_filter = camera_model[-3:]
 
-        if camera_model[:7] == "Survey3":
-            camera_model = "Survey3"
-
     else: #TIFF
         image = Image.open(image_path)
 
         camera_model = image.tag_v2[272]
         camera_filter = camera_model[-3:]
 
-        if camera_model[:7] == "Survey3":
-            camera_model = "Survey3"
-
     return camera_model, camera_filter 
 
 #Main function to produce calibration values from calibration photo
-def get_calibration_coefficients_from_target_image(target_image_path, in_folder):
+def get_calibration_coefficients_from_target_image(target_image_path, in_folder, vigImg):
     
-    if target_image_path.lower().endswith(('jpg','jpeg')):
-        FileType_calib = 'JPG'
-    elif target_image_path.lower().endswith(('tif','tiff')):
-        FileType_calib = 'TIFF'
-    else:
-        sys.exit("Unknown calibration image format. Requires JPG or TIFF.")
+    FileType_calib = FileType_function(target_image_path)
  
     camera_model_calib, camera_filter_calib = check_images_params(target_image_path, FileType_calib)
 
     img_folder, FileType_img  = check_input_folder_structure(in_folder)
     camera_model_img, camera_filter_img = check_images_params(img_folder, FileType_img)
+
+    print(f"\nCamera model {camera_model_calib} and camera filter {camera_filter_img}")
+    print(f"\nCamera model {camera_model_img} and camera filter {camera_filter_img}")
+    print(FileType_img)
 
     if camera_model_calib != camera_model_img or camera_filter_calib != camera_filter_img  or FileType_calib !=FileType_img :
         sys.exit("Calibration photo does not match input image (EXIF).")
@@ -317,8 +392,9 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder)
             target3 = get_target_center_from_QR_corner(corner_to_target_1_3_in_pixels, dx, dy, QR_corners[2], angle)
             target4 = get_target_center_from_QR_corner(corner_to_target_2_4_in_pixels, dx, dy, QR_corners[3], angle)
 
-        im2 = cv2.imread(target_image_path, -1)
-
+        im2 = ApplyVig(target_image_path, FileType_calib, vigImg)
+        # im2 = cv2.imread(target_image_path, -1)
+        print(im2.shape)
         target_sample_area_width_in_pixels = int(pixels_per_inch * 0.75)
 
         try:
@@ -366,7 +442,7 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder)
 
         print_center_targs(target_image_path, target1, target2, target3, target4, target_sample_area_width_in_pixels)
 
-        if camera_model_calib == "Survey3":
+        if "Survey3" in camera_model_calib:
             if camera_filter_calib == "OCN":
                 yred = refvalues["490/615/808"][0]
                 ygreen = refvalues["490/615/808"][1]
@@ -429,3 +505,12 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder)
     except Exception as e:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         print(str(e) + ' Line: ' + str(exc_tb.tb_lineno))
+
+def FileType_function(target_image_path):
+    if target_image_path.lower().endswith(('jpg','jpeg')):
+        FileType_calib = 'JPG'
+    elif target_image_path.lower().endswith(('tif','tiff')):
+        FileType_calib = 'TIFF'
+    else:
+        sys.exit("Unknown calibration image format. Requires JPG or TIFF.")
+    return FileType_calib

@@ -5,14 +5,21 @@
 
 import os, sys
 import cv2
+from matplotlib import pyplot as plt
 import numpy as np
-import subprocess
-from Calibration_Utils import get_calibration_coefficients_from_target_image
+import glob
+from sklearn import preprocessing
+from Calibration_Utils import get_calibration_coefficients_from_target_image, ApplyVig, FileType_function
 from ExifUtils import *
-
-if sys.platform == "win32":
-    si = subprocess.STARTUPINFO()
-    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+from sklearn.preprocessing import normalize
+  
+# Calculate NDVI from input image
+def create_ndvi_image(ndvi, name_file):
+    fig, ax = plt.subplots(figsize=(10, 10))
+    im = ax.imshow(ndvi, cmap='RdYlGn', vmin=-1, vmax=1)
+    ax.set_title('NDVI Image')
+    fig.colorbar(im)
+    plt.savefig(name_file)
 
 #Apply calibration formula to pixel values
 def calibrate_channel(mult_values, value):
@@ -103,47 +110,72 @@ def get_global_calib_extrema(calibration_values, global_max, global_min):
 
     return global_cal_max, global_cal_min
 
+#returns all tif files in the current directory
+def get_tif_files_in_dir(dir_name):
+    file_paths = []
+    file_paths.extend(glob.glob(dir_name + os.sep + "*.[tT][iI][fF]"))
+    return file_paths
+
 
 def main():
     
     #Read arguments from bat file
-    if len(sys.argv) > 1:
-         calib_photo = sys.argv[1]
-         inFolder = sys.argv[2]
-         outFolder = sys.argv[3]
+    calib_photo = "calib/calib.tif"
+    calib_photo = "calib/calib_2.jpg"
+    corrFolder  = "flatFields"
+    inFolder    = "inFolder"
+    outFolderV  = "outFolderV"
+    outFolder   = "outFolder"
+    ndviFolder  = "ndviFolder"
+    
+    #Read the per-band flat field images into a single 3-band VigImg
+    vigImg = []
+    vigImg.extend(get_tif_files_in_dir(corrFolder))
+    vigImg.sort()  # [B,G,R] = [0,1,2]
+    
+    print('\n(2/4) Computing Calibration Values') #Analyze photo of MAPIR Calibration Target V2
+    calibration_values, FileType_calib = get_calibration_coefficients_from_target_image(calib_photo, inFolder, vigImg)
 
-    print('\n(1/3) Computing Calibration Values') #Analyze photo of MAPIR Calibration Target V2
-    calibration_values, FileType_calib = get_calibration_coefficients_from_target_image(calib_photo, inFolder)
-
-    print('\n(2/3) Analyzing Input Images') #Analyze input image folder
+    print('\n(3/4) Analyzing Input Images') #Analyze input image folder
     maxes, mins  = get_channel_extrema_for_project(inFolder)
     global_cal_max, global_cal_min = get_global_calib_extrema(calibration_values, maxes, mins)
 
-    print('\n(3/3) Calibrating Images\n') #Apply calibration formula to input images
+    print('\n(4/4) Calibrating Images\n') #Apply calibration formula to input images
     
     for path, subdirs, files, in os.walk(inFolder):
         if files:
             for file_name in files:
-                img = cv2.imread(os.path.join(path, file_name))
+                FileType_calib = FileType_function(file_name)
+                # img = cv2.imread(os.path.join(path, file_name))
+                img = ApplyVig(os.path.join(path, file_name), FileType_calib, vigImg)
                 
-                red = img[:, :, 2]
+                red   = img[:, :, 2]
                 green = img[:, :, 1]
-                blue = img[:, :, 0]                
+                blue  = img[:, :, 0]                
 
                 red = calibrate_channel(calibration_values["red"], red)
                 green = calibrate_channel(calibration_values["green"], green)
                 blue = calibrate_channel(calibration_values["blue"], blue)
 
-                full_path_in = os.path.join(inFolder, file_name)
                 full_path_out = os.path.join(outFolder, file_name)
+                full_path_ndvi = os.path.join(ndviFolder, file_name)
 
                 if FileType_calib == "JPG":
-                    red = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, red)
+                    red   = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, red)
                     green = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, green)
-                    blue= contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, blue)
+                    blue  = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, blue)
 
                     imgJPG = cv2.merge((blue, green, red))
                     imgJPG = imgJPG.astype("uint8")
+                    inf = float("inf")
+                    blue = imgJPG[:, :, 0]
+                    red  = imgJPG[:, :, 2]
+                    
+                    ndvi = (blue.astype("float") - red.astype("float")) / (blue.astype("float") + red.astype("float") + 1.0)
+                    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
+                    train_minmax = min_max_scaler.fit_transform(ndvi)
+                    create_ndvi_image(train_minmax, full_path_ndvi)
+                    
                     cv2.imencode(".jpg", imgJPG)
                     cv2.imwrite(full_path_out, imgJPG) 
                     print(full_path_out)
@@ -158,9 +190,14 @@ def main():
                     imgTIF = cv2.merge((blue, green, red))
                     imgTIF = imgTIF.astype("uint32")
                     imgTIF = imgTIF.astype("uint16")
+
+                    ndvi = (blue.astype("float") - red.astype("float")) / (blue.astype("float") + red.astype("float"))
+                    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
+                    train_minmax = min_max_scaler.fit_transform(ndvi)
+                    create_ndvi_image(train_minmax, full_path_ndvi)
+                    
                     cv2.imencode(".tif", imgTIF)
                     cv2.imwrite(full_path_out, imgTIF)
-                    ExifUtils.copy_simple(full_path_in,full_path_out,si)
                     
                     print(full_path_out)
 
