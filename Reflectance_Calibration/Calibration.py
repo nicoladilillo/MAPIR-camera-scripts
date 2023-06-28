@@ -120,13 +120,13 @@ def get_tif_files_in_dir(dir_name):
 def main():
     
     #Read arguments from bat file
-    calib_photo = "calib/calib.tif"
     calib_photo = "calib/calib_2.jpg"
+    calib_photo = "calib/calib.tif"
     corrFolder  = "flatFields"
     inFolder    = "inFolder"
-    outFolderV  = "outFolderV"
     outFolder   = "outFolder"
     ndviFolder  = "ndviFolder"
+    degree      = 2
     
     #Read the per-band flat field images into a single 3-band VigImg
     vigImg = []
@@ -134,7 +134,7 @@ def main():
     vigImg.sort()  # [B,G,R] = [0,1,2]
     
     print('\n(2/4) Computing Calibration Values') #Analyze photo of MAPIR Calibration Target V2
-    r, g, b, calibration_values, FileType_calib = get_calibration_coefficients_from_target_image(calib_photo, inFolder, vigImg)
+    r, g, b, calibration_values, FileType_calib = get_calibration_coefficients_from_target_image(calib_photo, inFolder, vigImg, degree)
 
     print('\n(3/4) Analyzing Input Images') #Analyze input image folder
     maxes, mins  = get_channel_extrema_for_project(inFolder)
@@ -161,21 +161,15 @@ def main():
                 full_path_ndvi = os.path.join(ndviFolder, file_name)
 
                 if FileType_calib == "JPG":
-                    red   = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, red)
+                    red = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, red)
                     green = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, green)
-                    blue  = contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, blue)
+                    blue= contrast_stretch_channel(global_cal_max, global_cal_min, 255.0, blue)
 
+                    ndvi = (blue.astype("float") - red.astype("float")) / (blue.astype("float") + red.astype("float") + 1.0)
+                    create_ndvi_image(ndvi, full_path_ndvi)
+                    
                     imgJPG = cv2.merge((blue, green, red))
                     imgJPG = imgJPG.astype("uint8")
-                    inf = float("inf")
-                    blue = imgJPG[:, :, 0]
-                    red  = imgJPG[:, :, 2]
-                    
-                    ndvi = (blue.astype("float") - red.astype("float")) / (blue.astype("float") + red.astype("float") + 1.0)
-                    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
-                    train_minmax = min_max_scaler.fit_transform(ndvi)
-                    create_ndvi_image(train_minmax, full_path_ndvi)
-                    
                     cv2.imencode(".jpg", imgJPG)
                     cv2.imwrite(full_path_out, imgJPG) 
                     print(full_path_out)
@@ -192,9 +186,7 @@ def main():
                     imgTIF = imgTIF.astype("uint16")
 
                     ndvi = (blue.astype("float") - red.astype("float")) / (blue.astype("float") + red.astype("float"))
-                    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
-                    train_minmax = min_max_scaler.fit_transform(ndvi)
-                    create_ndvi_image(train_minmax, full_path_ndvi)
+                    create_ndvi_image(ndvi, full_path_ndvi)
                     
                     cv2.imencode(".tif", imgTIF)
                     cv2.imwrite(full_path_out, imgTIF)

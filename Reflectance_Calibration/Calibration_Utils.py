@@ -47,17 +47,16 @@ calibration_coefficients = {
 #Read file applying vignette correction
 def ApplyVig(target_image_path, FileType_calib, vigImg, vig=True):   
     
-    img = cv2.imread(target_image_path)
+    if FileType_calib == 'TIFF':
+        img = cv2.imread(target_image_path, cv2.IMREAD_UNCHANGED).astype("uint32").astype("uint16")
+        dc = [120, 119, 119]
+    else:
+        img = cv2.imread(target_image_path, cv2.IMREAD_UNCHANGED).astype("uint8")
+        dc = [0, 0, 0]
     
     if not vig:
         return img
-    
-    if FileType_calib == 'TIFF':
-        dc = [120, 119, 119]
-    else:
-        # return img  
-        dc = [0, 0, 0]
-        
+            
     #Create the dark current image (subMatrix) to be subtracted from img
     
     subMatrixB = np.full(shape = (3000, 4000),fill_value = dc[0],dtype=int)
@@ -248,17 +247,36 @@ def bad_target_photo(channels):
     return False
 
 #Calculates the linear regression of the channel model
-def get_channel_model(xr, xg, xb, y):
+def get_channel_model(x, y, degree):
     try:
-        X = np.array([xr, xg, xb]).T
-        X = np.append(X, [[0., 0.0, 0.0]], axis=0)
-        y = np.append(y, [0], axis=0)
-        print(y.shape)
-        print(y)
-        print(X.shape)
-        print(X)
+        # x.append(0)
+        # y.append(0)
+        # x.append(1)
+        # y.append(1)
+               
+        X = np.array(x).reshape(-1, 1)
+        Y = np.array(y).reshape(-1, 1)   
 
-        return LinearRegression().fit(X, y)
+        poly = PolynomialFeatures(degree=degree, include_bias=False)
+        poly_features = poly.fit_transform(X)
+        return LinearRegression().fit(poly_features, Y)
+    except Exception as e:
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        print("Error: ", e)
+        print("Line: " + str(exc_tb.tb_lineno))
+
+#Calculates the linear regression of the channel model
+def get_channel_model_multi_par(xr, xg, xb, y):
+    try:
+        X  = np.array([xr, xg, xb]).T
+        
+        y.append(0) 
+        y.append(1) 
+        Y   = np.array(y)
+        print(X)
+        print(Y)
+
+        return LinearRegression().fit(X, Y)
     except Exception as e:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         print("Error: ", e)
@@ -359,7 +377,7 @@ def check_images_params(image_path, FileType):
     return camera_model, camera_filter 
 
 #Main function to produce calibration values from calibration photo
-def get_calibration_coefficients_from_target_image(target_image_path, in_folder, vigImg):
+def get_calibration_coefficients_from_target_image(target_image_path, in_folder, vigImg, degree, type='linear'):
     
     FileType_calib = FileType_function(target_image_path)
  
@@ -411,7 +429,7 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder,
 
         im2 = ApplyVig(target_image_path, FileType_calib, vigImg)
         # im2 = cv2.imread(target_image_path, -1)
-        print(im2.shape)
+
         target_sample_area_width_in_pixels = int(pixels_per_inch * 0.75)
 
         try:
@@ -490,9 +508,9 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder,
                 xgreen = [x / 65535 for x in xgreen]
                 xblue = [x / 65535 for x in xblue]
 
-            xred, yred = check_exposure_quality(xred, yred)
+            xred, yred     = check_exposure_quality(xred, yred)
             xgreen, ygreen = check_exposure_quality(xgreen, ygreen)
-            xblue, yblue = check_exposure_quality(xblue, yblue)
+            xblue, yblue   = check_exposure_quality(xblue, yblue)
 
             x_channels = [xred, xgreen, xblue]
             
@@ -500,36 +518,54 @@ def get_calibration_coefficients_from_target_image(target_image_path, in_folder,
         # print("Green values: " + str(xgreen))
         # print("Blue values: " + str(xblue))
         
-        red_model   = get_channel_model(xred, xgreen, xblue, yred)
-        green_model = get_channel_model(xred, xgreen, xblue, ygreen)
-        blue_model  = get_channel_model(xred, xgreen, xblue, yblue)
+        xred.append(0)
+        xred.append(1)
+        xgreen.append(0)
+        xgreen.append(1)
+        xblue.append(0)
+        xblue.append(1)
         
-        print("\nRed model: " + str(red_model.coef_)   + " * x + " + str(red_model.intercept_))
-        print("Green model: " + str(green_model.coef_) + " * x + " + str(green_model.intercept_))
-        print("Blue model : " + str(blue_model.coef_)   + " * x + " + str(blue_model.intercept_))
+        if type == 'linear':        
+            red_model   = get_channel_model_multi_par(xred, xgreen, xblue, yred)
+            green_model = get_channel_model_multi_par(xred, xgreen, xblue, ygreen)
+            blue_model  = get_channel_model_multi_par(xred, xgreen, xblue, yblue)
+            
+            # print("\nRed model: " + str(red_model.coef_)   + " * x + " + str(red_model.intercept_))
+            # print("Green model: " + str(green_model.coef_) + " * x + " + str(green_model.intercept_))
+            # print("Blue model : " + str(blue_model.coef_)   + " * x + " + str(blue_model.intercept_))
 
-        red_slope, red_intercept = get_line_of_best_fit(xred, yred)
-        green_slope, green_intercept = get_line_of_best_fit(xgreen, ygreen)
-        blue_slope, blue_intercept = get_line_of_best_fit(xblue, yblue)
+            red_slope, red_intercept = get_line_of_best_fit(xred, yred)
+            green_slope, green_intercept = get_line_of_best_fit(xgreen, ygreen)
+            blue_slope, blue_intercept = get_line_of_best_fit(xblue, yblue)
 
-        calibration_coefficients["red"]["slope"] = red_slope
-        calibration_coefficients["red"]["intercept"] = red_intercept
+            calibration_coefficients["red"]["slope"] = red_slope
+            calibration_coefficients["red"]["intercept"] = red_intercept
 
-        calibration_coefficients["green"]["slope"] = green_slope
-        calibration_coefficients["green"]["intercept"] = green_intercept
+            calibration_coefficients["green"]["slope"] = green_slope
+            calibration_coefficients["green"]["intercept"] = green_intercept
 
-        calibration_coefficients["blue"]["slope"] = blue_slope
-        calibration_coefficients["blue"]["intercept"] = blue_intercept
+            calibration_coefficients["blue"]["slope"] = blue_slope
+            calibration_coefficients["blue"]["intercept"] = blue_intercept
+        else:
+            yred.append(0) 
+            yred.append(1) 
+            ygreen.append(0) 
+            ygreen.append(1) 
+            yblue.append(0) 
+            yblue.append(1) 
 
         if len(QR_corners) > 0:
             print("\nFound MAPIR Calibration Target V2, proceeding with calibration.")
         else:
             sys.exit("\nCould not find MAPIR Calibration Target V2. Please try a different calibration photo.")
 
-        if bad_target_photo(x_channels):
-            print("\nWARNING: BAD CALIBRATION PHOTO")
+        # if bad_target_photo(x_channels):
+        #     print("\nWARNING: BAD CALIBRATION PHOTO")
 
-        return red_model, green_model, blue_model, calibration_coefficients, FileType_calib
+        if type == 'weighted':
+            return xred, xgreen, xblue, yred, ygreen, yblue
+        else: 
+            return red_model, green_model, blue_model, calibration_coefficients, FileType_calib
 
     except Exception as e:
         exc_type, exc_obj, exc_tb = sys.exc_info()

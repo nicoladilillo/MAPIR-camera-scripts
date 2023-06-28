@@ -12,11 +12,32 @@ from sklearn import preprocessing
 from Calibration_Utils import get_calibration_coefficients_from_target_image, ApplyVig, FileType_function
 from ExifUtils import *
 from sklearn.preprocessing import PolynomialFeatures, normalize
+
+# function to perform locally weighted linear regression
+def local_weighted_regression(x0, X, Y, tau):
+    # print("x0: ", x0)
+    # print("X: ", X)
+    # print("Y: ", Y)
+    
+    # add bias term
+    x0 = np.r_[1, x0]
+    X = np.c_[np.ones(len(X)), X]
+     
+    # fit model: normal equations with kernel
+    xw = X.T * weights_calculate(x0, X, tau)
+    theta = np.linalg.pinv(xw @ X) @ xw @ Y
+    # "@" is used to
+    # predict value
+    return x0 @ theta
+ 
+# function to perform weight calculation
+def weights_calculate(x0, X, tau):
+    return np.exp(np.sum((X - x0) ** 2, axis=1) / (-2 * (tau **2) ))
   
 # Calculate NDVI from input image
 def create_ndvi_image(ndvi, name_file):
     fig, ax = plt.subplots(figsize=(10, 10))
-    im = ax.imshow(ndvi.reshape(3000, 4000), cmap='RdYlGn', vmin=-1, vmax=1)
+    im = ax.imshow(ndvi, cmap='RdYlGn', vmin=-1, vmax=1)
     ax.set_title('NDVI Image')
     fig.colorbar(im)
     plt.savefig(name_file)
@@ -126,23 +147,38 @@ def main():
     corrFolder  = "flatFields"
     inFolder    = "inFolder_copy"
     inFolder    = "inFolder"
-    outFolder   = "outFolder_multi"
-    ndviFolder  = "ndviFolder_multi"
+    ndviFolder  = "ndviFolder_w"
+    ndviFolder_s  = "ndviFolder_w_s"
     degree      = 1
+    tau         = 0.1
     
     #Read the per-band flat field images into a single 3-band VigImg
     vigImg = []
     vigImg.extend(get_tif_files_in_dir(corrFolder))
     vigImg.sort()  # [B,G,R] = [0,1,2]
     
-    print('\n(1/3) Computing Calibration Values') #Analyze photo of MAPIR Calibration Target V2
-    red_model, green_model, blue_model, calibration_values, FileType_calib = get_calibration_coefficients_from_target_image(calib_photo, inFolder, vigImg, degree)
+    print('\n(1/2) Computing Calibration Values') #Analyze photo of MAPIR Calibration Target V2
+    xred, xgreen, xblue, yred, ygreen, yblue = get_calibration_coefficients_from_target_image(calib_photo, inFolder, vigImg, degree, "weighted")
 
-    print('\n(2/3) Analyzing Input Images') #Analyze input image folder
-    # maxes, mins  = get_channel_extrema_for_project(inFolder)
-    # global_cal_max, global_cal_min = get_global_calib_extrema(calibration_values, maxes, mins)
-
-    print('\n(3/3) Calibrating Images\n') #Apply calibration formula to input images
+    x_n = np.arange(0, 1.0001, 0.0001).round(4)
+    red_plot = [local_weighted_regression(x, xred, yred, tau) for x in x_n]
+    green_plot = [local_weighted_regression(x, xgreen, ygreen, tau) for x in x_n]
+    blue_plot = [local_weighted_regression(x, xblue, yblue, tau) for x in x_n]
+    
+    plt.plot(x_n, red_plot)
+    plt.scatter(xred, yred)
+    plt.savefig("red_plot.png")
+    plt.close()
+    
+    plt.plot(x_n, blue_plot)
+    plt.scatter(xblue, yblue)
+    plt.savefig("blue_plot.png")
+    plt.close()
+    
+    red_predict  = dict(zip(x_n, red_plot))
+    blue_predict = dict(zip(x_n, blue_plot))   
+    
+    print('\n(2/2) Calibrating Images\n') #Apply calibration formula to input images
     
     for path, subdirs, files, in os.walk(inFolder):
         if files:
@@ -157,83 +193,45 @@ def main():
                 # print("green: ", img[:,:,1].max(), img[:,:,1].min())
                 # print("blue: ", img[:,:,0].max(), img[:,:,0].min())
                 
-                img = ApplyVig(os.path.join(path, file_name), FileType_calib, vigImg).reshape(3000 * 4000, 3)   
-                # print(img.max(), img.min())
+                img = ApplyVig(os.path.join(path, file_name), FileType_calib, vigImg)
+                # img = cv2.resize(img, (0, 0), fx=0.2, fy=0.2, interpolation=cv2.INTER_AREA)
+                shape = img.shape
+                s1 = shape[0]
+                s2 = shape[1]
 
-                full_path_out = os.path.join(outFolder, file_name)
+                # full_path_out = os.path.join(outFolder, file_name)
                 full_path_ndvi = os.path.join(ndviFolder, file_name)
+                full_path_ndvi_s = os.path.join(ndviFolder_s, file_name)
                       
                 if FileType_calib == "JPG":
                     img   = img/255.0
                 elif FileType_calib == "TIFF":
                     img   = img/65535.0
                     
-                # min_max_scaler = preprocessing.MinMaxScaler(feature_range=(0, 1))
-                # img = min_max_scaler.fit_transform(img)
-                
-                # red   = img[:,2].astype("float").reshape(-1,1)
-                # green = img[:,1].astype("float").reshape(-1,1)
-                # blue  = img[:,0].astype("float").reshape(-1,1)
-                # # print(red.max(), red.min())
-                # # print(green.max(), green.min())
-                # # print(blue.max(), blue.min())
-                    
-                # poly = PolynomialFeatures(degree=degree, include_bias=False)
-                # red   = red_model.predict(poly.fit_transform(red))
-                # green = green_model.predict(poly.fit_transform(green))
-                # blue  = blue_model.predict(poly.fit_transform(blue))
-                
-                red   = red_model.predict(img).reshape(-1,1)
-                green = green_model.predict(img).reshape(-1,1)
-                blue  = blue_model.predict(img).reshape(-1,1)
-                # red[red > 1] = 1
-                # red[red < 0] = 0
-                # green[green > 1] = 1    
-                # green[green < 0] = 0    
-                # blue[blue > 1] = 1
-                # blue[blue < 0] = 0 
-                # print(red.max(), red.min())
-                # print(green.max(), green.min())
-                # print(blue.max(), blue.min())
-                # print(red.shape)    
-                
-                
                 min_max_scaler = preprocessing.MinMaxScaler(feature_range=(0, 1))
-                red = min_max_scaler.fit_transform(red)
-                print(red.max(), red.min())
-                print(red)
-                print(blue.max(), blue.min())
-                print(blue)
-                green = min_max_scaler.fit_transform(green)
-                blue = min_max_scaler.fit_transform(blue)
-                # print(red.max(), red.min())
-                # print(green.max(), green.min())
-                # print(blue.max(), blue.min())
+                red = min_max_scaler.fit_transform(img[:,:,2].astype("float").reshape(-1,1)).round(4)
+                blue = min_max_scaler.fit_transform(img[:,:,0].astype("float").reshape(-1,1)).round(4) 
+                # print("red: ", red)
+                # print("blue: ", blue)
                 
-                img_merge = cv2.merge((blue.reshape(3000,4000), green.reshape(3000,4000), red.reshape(3000,4000)))
-                if FileType_calib == "JPG":
-                    img_merge = img_merge.astype("uint8")
-                    cv2.imencode(".jpg", img_merge)
-                elif FileType_calib == "TIFF":
-                    img_merge = img_merge.astype("uint32")
-                    img_merge = img_merge.astype("uint16")
-                    cv2.imencode(".tif", img_merge)
-                cv2.imwrite(full_path_out, img_merge) 
-                print(full_path_out)
+                print("Begining Calibration NIR")
+                # blue_c   = np.array([local_weighted_regression(x, xblue, yblue, tau) for x in blue]).reshape(-1,1)   
+                blue_c = np.array([blue_predict[x] for x in blue.reshape(-1).tolist()]).reshape(-1,1)
+                print("Begining Calibration RED")
+                # red_c   = np.array([local_weighted_regression(x, xred, yred, tau) for x in red]).reshape(-1,1)
+                red_c = np.array([red_predict[x] for x in red.reshape(-1).tolist()]).reshape(-1,1)
                 
-                # print("... after Calibration")
-                # print("red: ", red.max(), red.min())
-                # print("green: ", green.max(), green.min())
-                # print("blue: ", blue.max(), blue.min())
-
+                red_c = min_max_scaler.fit_transform(red_c)
+                blue_c = min_max_scaler.fit_transform(blue_c)
                     
                 # ndvi = (blue.astype("float") - red.astype("float") + 0.00000001) / (blue.astype("float") + red.astype("float") + 0.00000001)
-                ndvi = (blue.astype("float") - red.astype("float")) / (blue.astype("float") + red.astype("float") + 0.00000001)
-                # min_max_scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
-                # ndvi = min_max_scaler.fit_transform(ndvi)
-                # print(ndvi.max(), ndvi.min())
+                ndvi = (blue_c.astype("float") - red_c.astype("float")) / (blue_c.astype("float") + red_c.astype("float") + 0.00000001)
+                print(ndvi.max(), ndvi.min())
+                create_ndvi_image(ndvi.reshape((s1, s2)), full_path_ndvi)
+                min_max_scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
+                ndvi = min_max_scaler.fit_transform(ndvi)
+                create_ndvi_image(ndvi.reshape((s1, s2)), full_path_ndvi_s)
                 
-                create_ndvi_image(ndvi.reshape(3000, 4000), full_path_ndvi)
                 
 
     print('\nFinished Processing\n') 
